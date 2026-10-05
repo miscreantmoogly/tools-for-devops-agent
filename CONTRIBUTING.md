@@ -41,7 +41,23 @@ Follow these guidelines for each tool:
 
 #### Skill Metadata
 
-Make sure the frontmatter in the `SKILL.md` file includes a `metadata` block with `version`, `author` (your GitHub user) and `aws-devops-agent-skills.*` fields (see examples in existing skills)
+Make sure the frontmatter in the `SKILL.md` file includes a `metadata` block with `version`, `author` (your GitHub user) and `aws-devops-agent-skills.*` fields (see examples in existing skills). The `skills/<name>/` path is the skill's identity, so frontmatter `name` must match it. `name` is machine-readable, optional `title` is the display label, `description` explains when the skill activates, and optional `metadata.summary` is shorter catalog copy; title and summary fall back to the path-derived display name and description.
+
+Renaming a directory creates a new identity, and deleting one does not remove copies people already installed. Retired paths cannot be reused. Put installable content only in root `SKILL.md` and regular, non-executable files under `references/` or `assets/`, using `.md`, `.txt`, `.json`, `.yaml`, `.yml`, `.xml`, `.csv`, `.tsv`, `.html`, `.htm`, `.png`, `.jpg`, `.jpeg`, `.gif`, `.svg`, `.webp`, or `.pdf`. README, changelog, eval, and tooling files stay in the repository but are not packaged. Confirm that you own or have permission to contribute every included asset under Apache-2.0.
+
+Contributors choose the strict Semantic Version in `metadata.version`; generated archives receive a SHA-256 based on their exact bytes. Increase the version when installable content changes. The validator blocks malformed metadata, version decreases, unsafe packages, retired-path reuse, and narrow high-confidence PEM private-key or AWS access-key patterns. It warns about renames, runtime changes without a version increase, and version-only increases. These checks are not comprehensive secret or semantic scanning, so maintainers still review behavior, update intent, asset rights, and IAM safety.
+
+Run the same catalog checks locally before opening a pull request:
+
+```bash
+python3 -m unittest discover -s tests -p 'test_*catalog*.py' -v
+python3 .github/scripts/validate_skill_catalog.py --skill <skill-name>
+python3 .github/scripts/validate_skill_catalog.py --all
+out="$(mktemp -d)" && python3 .github/scripts/generate_skill_catalog.py --output-dir "$out" && python3 .github/scripts/generate_skill_catalog.py --output-dir "$out" --check
+mkdocs build --strict
+```
+
+The read-only `validate-skill-catalog` workflow runs on pull requests from forks without credentials or publication access. Its stable status is advisory until a repository admin adds `validate-skill-catalog` to the required checks in branch protection or a ruleset.
 
 #### Test Your Skill
 

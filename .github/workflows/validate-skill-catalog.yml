@@ -1,0 +1,54 @@
+name: Validate skill catalog
+
+# This read-only check validates catalog policy and deterministic artifacts for every
+# pull request, including forks. It publishes nothing and receives no credentials.
+# Keeping the trigger unfiltered ensures the stable status is reported even when a
+# pull request does not touch skills/.
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-skill-catalog-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  validate-skill-catalog:
+    name: validate-skill-catalog
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install documentation dependency
+        run: python3 -m pip install mkdocs-material==9.6.14
+
+      - name: Run catalog tests
+        run: python3 -m unittest discover -s tests -p 'test_*catalog*.py' -v
+
+      - name: Validate pull request catalog changes
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          git fetch --no-tags --quiet origin \
+            "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
+          python3 .github/scripts/validate_skill_catalog.py \
+            --base-ref "origin/${BASE_REF}" \
+            --head-ref HEAD
+
+      - name: Verify deterministic catalog generation
+        run: |
+          out="$(mktemp -d)"
+          trap 'rm -rf "$out"' EXIT
+          python3 .github/scripts/generate_skill_catalog.py --output-dir "$out"
+          python3 .github/scripts/generate_skill_catalog.py --output-dir "$out" --check
+
+      - name: Build documentation
+        run: mkdocs build --strict
