@@ -129,6 +129,29 @@ metadata:
             self.assertEqual("AWS RDS RCA", record.title)
             self.assertEqual(description, record.summary)
 
+    def test_requires_a_real_skills_catalog_root(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            skills_dir = root / "skills"
+            with self.assertRaisesRegex(SkillCatalogError, "must exist as a directory"):
+                discover_skill_paths(skills_dir)
+
+            write_skill(
+                root,
+                "outside-skill",
+                "name: outside-skill\ndescription: Outside.\nmetadata:\n  author: test\n  version: 1.0.0",
+            )
+            catalog_source = root / "catalog-source"
+            skills_dir.rename(catalog_source)
+            skills_dir.symlink_to(catalog_source, target_is_directory=True)
+            with self.assertRaisesRegex(SkillCatalogError, "must not be a symlink"):
+                discover_skill_paths(skills_dir)
+
+            skills_dir.unlink()
+            skills_dir.write_text("not a directory\n", encoding="utf-8")
+            with self.assertRaisesRegex(SkillCatalogError, "must be a directory"):
+                discover_skill_paths(skills_dir)
+
     def test_discovers_only_real_skill_directories_in_sorted_order(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

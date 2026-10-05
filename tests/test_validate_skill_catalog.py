@@ -93,6 +93,48 @@ class SkillCatalogValidatorTests(unittest.TestCase):
         self.assertEqual(set(), report.skill_ids)
         self.assertEqual([], report.findings)
 
+    def test_root_housekeeping_edit_is_not_a_skill_change(self):
+        base = self.initial_skill()
+        (self.repo.root / "skills" / ".gitignore").write_text(
+            "cli_debug/\n", encoding="utf-8"
+        )
+        head = self.repo.commit("update skills housekeeping")
+
+        report = validator.validate_pull_request(self.repo.root, base, head)
+
+        self.assertEqual(set(), report.skill_ids)
+        self.assertEqual([], report.findings)
+
+    def test_linked_skills_container_is_blocked_in_pull_request_mode(self):
+        base = self.initial_skill()
+        catalog_source = self.repo.root / "catalog-source"
+        shutil.copytree(self.repo.root / "skills", catalog_source)
+        shutil.rmtree(self.repo.root / "skills")
+        (self.repo.root / "skills").symlink_to(
+            "catalog-source", target_is_directory=True
+        )
+        head = self.repo.commit("replace skills root with link")
+
+        report = validator.validate_pull_request(self.repo.root, base, head)
+
+        self.assertTrue(
+            any("skills root must be a real directory" in f.message for f in report.blockers)
+        )
+
+    def test_local_audit_requires_existing_directory_skills_root(self):
+        self.initial_skill()
+        skills_dir = self.repo.root / "skills"
+        shutil.rmtree(skills_dir)
+
+        missing = validator.validate_local(self.repo.root, ("example-skill",))
+        self.assertTrue(any("must exist as a directory" in f.message for f in missing.blockers))
+
+        skills_dir.write_text("not a directory\n", encoding="utf-8")
+        non_directory = validator.validate_local(
+            self.repo.root, ("example-skill",)
+        )
+        self.assertTrue(any("must be a directory" in f.message for f in non_directory.blockers))
+
     def test_linked_skill_root_is_changed_and_blocked_in_pull_request_mode(self):
         base = self.initial_skill()
         outside = self.repo.root / "outside"

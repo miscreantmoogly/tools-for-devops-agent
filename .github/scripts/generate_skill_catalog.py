@@ -54,6 +54,12 @@ ALLOWED_EXTENSIONS = frozenset(
     }
 )
 PACKAGE_ROOTS = ("assets", "references")
+_WINDOWS_INVALID_COMPONENT_CHARACTERS = frozenset('<>:"|?*')
+_WINDOWS_RESERVED_BASENAMES = frozenset(
+    {"aux", "con", "conin$", "conout$", "nul", "prn"}
+    | {f"com{index}" for index in range(1, 10)}
+    | {f"lpt{index}" for index in range(1, 10)}
+)
 FIXED_ZIP_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
 FIXED_ZIP_MODE = stat.S_IFREG | 0o644
 
@@ -82,6 +88,11 @@ class OutputDifferences:
         return bool(self.missing or self.changed or self.extra)
 
 
+def _extractor_normalized_archive_path(name: str) -> str:
+    """Approximate the case and trailing-character normalization of extractors."""
+    return "/".join(component.rstrip(" .").casefold() for component in name.split("/"))
+
+
 def validate_archive_path(name: str) -> None:
     """Reject archive names that are unsafe or platform-dependent."""
     if not name:
@@ -94,8 +105,23 @@ def validate_archive_path(name: str) -> None:
     path = PurePosixPath(name)
     if path.is_absolute() or PureWindowsPath(name).is_absolute():
         raise PackageError(f"archive path {name!r} must be relative")
-    if any(part in {"", ".", ".."} for part in name.split("/")):
+    components = name.split("/")
+    if any(component in {"", ".", ".."} for component in components):
         raise PackageError(f"archive path {name!r} contains traversal or an empty segment")
+    for component in components:
+        if any(character in _WINDOWS_INVALID_COMPONENT_CHARACTERS for character in component):
+            raise PackageError(
+                f"archive path {name!r} contains a character invalid on Windows"
+            )
+        if component.endswith((" ", ".")):
+            raise PackageError(
+                f"archive path {name!r} contains a component ending in a space or period"
+            )
+        basename = component.split(".", 1)[0].rstrip(" .").casefold()
+        if basename in _WINDOWS_RESERVED_BASENAMES:
+            raise PackageError(
+                f"archive path {name!r} contains a Windows-reserved component"
+            )
 
     if name != "SKILL.md" and (
         len(path.parts) < 2 or path.parts[0] not in PACKAGE_ROOTS
@@ -128,11 +154,10 @@ def validate_package_entries(entries: Iterable[PackageEntry]) -> tuple[PackageEn
     manifest = tuple(entries)
     exact_names: set[str] = set()
     folded_names: dict[str, str] = {}
+    normalized_names: dict[str, str] = {}
     skill_count = 0
 
     for entry in manifest:
-        validate_archive_path(entry.archive_name)
-        _validate_source_file(entry)
         if entry.archive_name in exact_names:
             raise PackageError(f"duplicate archive path: {entry.archive_name}")
         exact_names.add(entry.archive_name)
@@ -144,6 +169,17 @@ def validate_package_entries(entries: Iterable[PackageEntry]) -> tuple[PackageEn
                 f"case-insensitive archive path collision: {previous!r} and {entry.archive_name!r}"
             )
         folded_names[folded] = entry.archive_name
+
+        normalized = _extractor_normalized_archive_path(entry.archive_name)
+        previous = normalized_names.get(normalized)
+        if previous is not None:
+            raise PackageError(
+                f"extractor-normalized archive path collision: {previous!r} and {entry.archive_name!r}"
+            )
+        normalized_names[normalized] = entry.archive_name
+
+        validate_archive_path(entry.archive_name)
+        _validate_source_file(entry)
         if entry.archive_name == "SKILL.md":
             skill_count += 1
 

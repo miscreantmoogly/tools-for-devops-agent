@@ -251,6 +251,11 @@ class CatalogGenerationTests(unittest.TestCase):
             "assets",
             "assets\\windows.md",
             "assets/control\n.md",
+            "assets/a:b.md",
+            "assets/CON.txt",
+            "references/lpt9.yaml",
+            "assets/trailing.md.",
+            "assets/trailing.md ",
             "arbitrary/file.md",
         )
         for name in unsafe_names:
@@ -264,6 +269,7 @@ class CatalogGenerationTests(unittest.TestCase):
             for names, message in (
                 (("assets/file.md", "assets/file.md"), "duplicate"),
                 (("assets/File.md", "assets/file.md"), "case-insensitive"),
+                (("assets/file.md", "assets/file.md."), "extractor-normalized"),
             ):
                 with self.subTest(names=names), self.assertRaisesRegex(PackageError, message):
                     validate_package_entries(

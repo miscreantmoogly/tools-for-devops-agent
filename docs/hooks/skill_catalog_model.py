@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+import stat
 from dataclasses import dataclass
 from functools import total_ordering
 from pathlib import Path
@@ -143,10 +144,23 @@ def format_display_name(skill_id: str) -> str:
     )
 
 
+def validate_skills_root(skills_dir: Path) -> None:
+    """Require the catalog root to be a real directory, not a followed link."""
+    try:
+        mode = skills_dir.lstat().st_mode
+    except FileNotFoundError as error:
+        raise SkillCatalogError(
+            f"{skills_dir}: skills root must exist as a directory"
+        ) from error
+    if stat.S_ISLNK(mode):
+        raise SkillCatalogError(f"{skills_dir}: skills root must not be a symlink")
+    if not stat.S_ISDIR(mode):
+        raise SkillCatalogError(f"{skills_dir}: skills root must be a directory")
+
+
 def discover_skill_paths(skills_dir: Path) -> tuple[Path, ...]:
-    """Return SKILL.md files in stable path order, rejecting unsafe skill roots."""
-    if not skills_dir.is_dir():
-        return ()
+    """Return SKILL.md files in stable path order, rejecting unsafe roots."""
+    validate_skills_root(skills_dir)
 
     skill_paths: list[Path] = []
     for entry in sorted(skills_dir.iterdir(), key=lambda path: path.name):

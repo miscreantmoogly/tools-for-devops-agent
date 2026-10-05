@@ -40,6 +40,7 @@ from skill_catalog_model import (  # noqa: E402
     compare_semver,
     load_skill,
     metadata_field_line_span,
+    validate_skills_root,
 )
 
 
@@ -47,6 +48,7 @@ TEXT_PAYLOAD_EXTENSIONS = frozenset(
     {".csv", ".htm", ".html", ".json", ".md", ".svg", ".tsv", ".txt", ".xml", ".yaml", ".yml"}
 )
 SKILL_ID_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+SKILLS_ROOT_HOUSEKEEPING_FILES = frozenset({".gitignore"})
 PEM_PRIVATE_KEY_PATTERN = re.compile(
     rb"-----BEGIN (?:RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRIVATE KEY-----"
 )
@@ -179,15 +181,60 @@ def changed_paths(repo_root: Path, base: str, head_ref: str) -> tuple[DiffChange
         base,
         head_ref,
         "--",
-        "skills/",
+        "skills",
         text=False,
     )
     return parse_name_status(result.stdout)
 
 
+def _catalog_root_entry(repo_root: Path, ref: str) -> tuple[str, str] | None:
+    result = _git_checked(
+        repo_root,
+        "ls-tree",
+        "-z",
+        "--full-tree",
+        ref,
+        "--",
+        "skills",
+        text=False,
+    )
+    for raw_entry in (entry for entry in result.stdout.split(b"\0") if entry):
+        try:
+            metadata, raw_path = raw_entry.split(b"\t", 1)
+            mode, object_type, _ = metadata.decode("ascii").split(" ")
+            path = raw_path.decode("utf-8")
+        except (ValueError, UnicodeDecodeError) as error:
+            raise GitError("git ls-tree returned malformed data for skills") from error
+        if path == "skills":
+            return mode, object_type
+    return None
+
+
+def _validate_ref_skills_root(
+    repo_root: Path, ref: str, report: ValidationReport
+) -> bool:
+    entry = _catalog_root_entry(repo_root, ref)
+    if entry == ("040000", "tree"):
+        return True
+
+    report.skill_ids.add("catalog")
+    if entry is None:
+        message = "skills root must exist as a real directory"
+    else:
+        mode, object_type = entry
+        message = (
+            "skills root must be a real directory "
+            f"(found Git mode {mode!r} and object type {object_type!r})"
+        )
+    report.add("blocker", message, "catalog", "skills")
+    return False
+
+
 def _skill_id_from_path(path: str) -> str | None:
     parts = path.split("/")
     if len(parts) < 2 or parts[0] != "skills" or not parts[1]:
+        return None
+    if len(parts) == 2 and parts[1] in SKILLS_ROOT_HOUSEKEEPING_FILES:
         return None
     return parts[1]
 
@@ -441,7 +488,10 @@ def validate_pull_request(
     base = merge_base(repo_root, base_ref, head_ref)
     changes = changed_paths(repo_root, base, head_ref)
     report = ValidationReport()
+    if not changes:
+        return report
     identities = changed_skill_ids(changes)
+    _validate_ref_skills_root(repo_root, head_ref, report)
     if not identities:
         return report
     _add_rename_advisories(changes, report)
@@ -534,6 +584,10 @@ def validate_pull_request(
 
 def _all_skill_ids(repo_root: Path) -> tuple[str, ...]:
     skills_dir = repo_root / "skills"
+    try:
+        validate_skills_root(skills_dir)
+    except (OSError, SkillCatalogError):
+        return ()
     return tuple(
         sorted(
             path.name
@@ -550,6 +604,12 @@ def _all_skill_ids(repo_root: Path) -> tuple[str, ...]:
 
 def validate_local(repo_root: Path, skill_ids: Iterable[str]) -> ValidationReport:
     report = ValidationReport()
+    try:
+        validate_skills_root(repo_root / "skills")
+    except (OSError, SkillCatalogError) as error:
+        report.skill_ids.add("catalog")
+        report.add("blocker", str(error), "catalog", "skills")
+        return report
     for skill_id in sorted(set(skill_ids)):
         inspect_skill(repo_root, skill_id, report)
     return report
