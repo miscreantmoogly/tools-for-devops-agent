@@ -174,6 +174,43 @@ class SkillCatalogValidatorTests(unittest.TestCase):
         self.assertFalse(report.blockers)
         self.assertTrue(any("with no other installable" in f.message for f in report.advisories))
 
+    def test_summary_version_text_does_not_hide_runtime_warning(self):
+        def write_summary_skill(body: str) -> None:
+            skill_dir = write_skill(self.repo.root, body=body)
+            skill_path = skill_dir / "SKILL.md"
+            skill_path.write_text(
+                skill_path.read_text(encoding="utf-8").replace(
+                    "  version: 1.0.0\n",
+                    "  version: 1.0.0\n"
+                    "  summary: |\n"
+                    "    version: summary text\n",
+                ),
+                encoding="utf-8",
+            )
+
+        write_summary_skill("# Example\n")
+        base = self.repo.commit("add skill with literal summary")
+        write_summary_skill("# Changed runtime\n")
+        head = self.repo.commit("change runtime")
+
+        report = validator.validate_pull_request(self.repo.root, base, head)
+
+        self.assertFalse(report.blockers)
+        self.assertTrue(
+            any("runtime bytes changed without increasing version" in f.message for f in report.advisories)
+        )
+
+    def test_block_scalar_version_only_increase_is_advisory(self):
+        write_skill(self.repo.root, version=">-\n    1.0.0")
+        base = self.repo.commit("add skill with folded version")
+        write_skill(self.repo.root, version=">-\n    1.0.1")
+        head = self.repo.commit("increase folded version")
+
+        report = validator.validate_pull_request(self.repo.root, base, head)
+
+        self.assertFalse(report.blockers)
+        self.assertTrue(any("with no other installable" in f.message for f in report.advisories))
+
     def test_deleted_and_renamed_identities_remain_visible(self):
         base = self.initial_skill("old-skill")
         run_git(self.repo.root, "mv", "skills/old-skill", "skills/new-skill")

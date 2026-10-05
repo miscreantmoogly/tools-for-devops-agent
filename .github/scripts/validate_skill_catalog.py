@@ -39,6 +39,7 @@ from skill_catalog_model import (  # noqa: E402
     SkillRecord,
     compare_semver,
     load_skill,
+    metadata_field_line_span,
 )
 
 
@@ -288,34 +289,18 @@ def materialize_skill(
 
 
 def _neutralize_version(content: bytes, source_path: Path) -> bytes:
-    """Replace only the metadata.version line with one canonical placeholder."""
+    """Replace the complete parsed metadata.version scalar with one placeholder."""
     try:
         text = content.decode("utf-8")
     except UnicodeDecodeError as error:
         raise SkillCatalogError(f"{source_path}: SKILL.md must be UTF-8") from error
     lines = text.splitlines(keepends=True)
-    if not lines or lines[0].rstrip("\r\n") != "---":
-        raise SkillCatalogError(f"{source_path}: missing opening frontmatter delimiter")
-
-    in_metadata = False
-    replaced = 0
-    for index in range(1, len(lines)):
-        raw = lines[index]
-        body = raw.rstrip("\r\n")
-        ending = raw[len(body) :]
-        if body == "---":
-            break
-        if body and not body[0].isspace():
-            in_metadata = body.split(":", 1)[0] == "metadata"
-            continue
-        if in_metadata and re.match(r"^[ \t]+version:", body):
-            indentation = body[: len(body) - len(body.lstrip())]
-            lines[index] = f"{indentation}version: __CATALOG_VERSION__{ending}"
-            replaced += 1
-    if replaced != 1:
-        raise SkillCatalogError(
-            f"{source_path}: expected exactly one metadata.version field for fingerprinting"
-        )
+    start, stop = metadata_field_line_span(source_path, "version")
+    raw = lines[start]
+    body = raw.rstrip("\r\n")
+    ending = raw[len(body) :]
+    indentation = body[: len(body) - len(body.lstrip())]
+    lines[start:stop] = [f"{indentation}version: __CATALOG_VERSION__{ending}"]
     return "".join(lines).encode("utf-8")
 
 

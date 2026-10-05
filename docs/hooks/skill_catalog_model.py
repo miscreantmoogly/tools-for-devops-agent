@@ -166,6 +166,22 @@ def discover_skill_paths(skills_dir: Path) -> tuple[Path, ...]:
 
 def parse_frontmatter(path: Path) -> Mapping[str, object]:
     """Parse the scalar-and-metadata subset used by SKILL.md without a YAML dependency."""
+    values, _ = _parse_frontmatter(path)
+    return values
+
+
+def metadata_field_line_span(path: Path, key: str) -> tuple[int, int]:
+    """Return the complete zero-based line span for one parsed metadata scalar."""
+    _, metadata_spans = _parse_frontmatter(path)
+    try:
+        return metadata_spans[key]
+    except KeyError as error:
+        raise SkillCatalogError(f"{path}: metadata field {key!r} is required") from error
+
+
+def _parse_frontmatter(
+    path: Path,
+) -> tuple[Mapping[str, object], Mapping[str, tuple[int, int]]]:
     text = path.read_text(encoding="utf-8")
     lines = text.splitlines()
     if not lines or lines[0] != "---":
@@ -177,6 +193,7 @@ def parse_frontmatter(path: Path) -> Mapping[str, object]:
         raise SkillCatalogError(f"{path}: missing closing frontmatter delimiter") from error
 
     values: dict[str, object] = {}
+    metadata_spans: dict[str, tuple[int, int]] = {}
     frontmatter = lines[1:end]
     index = 0
     while index < len(frontmatter):
@@ -196,6 +213,7 @@ def parse_frontmatter(path: Path) -> Mapping[str, object]:
         raw_value = match.group(2) or ""
         index += 1
 
+        nested_start = index
         nested: list[str] = []
         while index < len(frontmatter):
             candidate = frontmatter[index]
@@ -207,11 +225,17 @@ def parse_frontmatter(path: Path) -> Mapping[str, object]:
         if key == "metadata":
             if raw_value.strip():
                 raise SkillCatalogError(f"{path}: metadata must be a nested mapping")
-            values[key] = _parse_metadata(nested, path)
+            metadata, relative_spans = _parse_metadata(nested, path)
+            values[key] = metadata
+            for field_name, (start, stop) in relative_spans.items():
+                metadata_spans[field_name] = (
+                    nested_start + start + 1,
+                    nested_start + stop + 1,
+                )
         else:
             values[key] = _parse_scalar(raw_value, nested, path, key)
 
-    return MappingProxyType(values)
+    return MappingProxyType(values), MappingProxyType(metadata_spans)
 
 
 def load_skill(path: Path) -> SkillRecord:
@@ -280,13 +304,16 @@ def load_skills(skills_dir: Path) -> tuple[SkillRecord, ...]:
     return tuple(load_skill(path) for path in discover_skill_paths(skills_dir))
 
 
-def _parse_metadata(lines: list[str], path: Path) -> Mapping[str, str]:
+def _parse_metadata(
+    lines: list[str], path: Path
+) -> tuple[Mapping[str, str], Mapping[str, tuple[int, int]]]:
     metadata: dict[str, str] = {}
+    spans: dict[str, tuple[int, int]] = {}
     significant_lines = [
         line for line in lines if line.strip() and not line.lstrip().startswith("#")
     ]
     if not significant_lines:
-        return MappingProxyType(metadata)
+        return MappingProxyType(metadata), MappingProxyType(spans)
     indentation = min(len(line) - len(line.lstrip()) for line in significant_lines)
 
     index = 0
@@ -295,6 +322,7 @@ def _parse_metadata(lines: list[str], path: Path) -> Mapping[str, str]:
         if not line.strip() or line.lstrip().startswith("#"):
             index += 1
             continue
+        field_start = index
         line_indentation = len(line) - len(line.lstrip())
         if line_indentation != indentation:
             raise SkillCatalogError(f"{path}: malformed metadata indentation")
@@ -327,7 +355,8 @@ def _parse_metadata(lines: list[str], path: Path) -> Mapping[str, str]:
             path,
             f"metadata.{key}",
         )
-    return MappingProxyType(metadata)
+        spans[key] = (field_start, index)
+    return MappingProxyType(metadata), MappingProxyType(spans)
 
 
 def _parse_scalar(
