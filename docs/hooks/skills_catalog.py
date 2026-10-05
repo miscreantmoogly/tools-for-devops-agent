@@ -19,84 +19,29 @@ import json
 import re
 from pathlib import Path
 
+try:
+    from .skill_catalog_model import format_display_name, load_skills
+except ImportError:  # MkDocs loads hook files as standalone modules.
+    from skill_catalog_model import format_display_name, load_skills
 
-def _parse_frontmatter(path: Path) -> dict:
-    """Extract YAML frontmatter from a SKILL.md file (minimal parser, no deps)."""
-    text = path.read_text(encoding="utf-8")
-    if not text.startswith("---"):
-        return {}
 
-    end = text.find("---", 3)
-    if end == -1:
-        return {}
-
-    fm_text = text[3:end]
-    result = {"_body": text[end + 3:].strip()}
-
-    # Parse top-level keys (name, description)
-    current_key = None
-    current_value = ""
-
-    for line in fm_text.splitlines():
-        # Top-level key: value
-        m = re.match(r'^(\w[\w\-.]*):\s*(.*)', line)
-        if m and not line.startswith("  "):
-            if current_key:
-                result[current_key] = current_value.strip()
-            current_key = m.group(1)
-            current_value = m.group(2)
-        elif current_key and line.startswith("  "):
-            # Continuation or nested
-            current_value += " " + line.strip()
-
-    if current_key:
-        result[current_key] = current_value.strip()
-
-    # Parse metadata block specifically
-    metadata = {}
-    in_metadata = False
-    for line in fm_text.splitlines():
-        if line.strip() == "metadata:":
-            in_metadata = True
-            continue
-        if in_metadata:
-            if line and not line.startswith(" "):
-                break
-            m = re.match(r'^\s+([\w\-.]+ *):\s*"?([^"]*)"?\s*$', line)
-            if m:
-                metadata[m.group(1).strip()] = m.group(2).strip()
-
-    result["metadata"] = metadata
-    return result
+_format_name = format_display_name
 
 
 def _build_catalog(config_dir: str) -> list:
-    """Scan all skills and build catalog entries."""
-    skills_dir = Path(config_dir) / "skills"
+    """Build the legacy six-key Pages records from the shared skill model.
+
+    Pages intentionally remains a presentation adapter: README copy still controls card
+    text, while identity, metadata, title fallback, and dimensions come from the same
+    normalized records used by other catalog consumers.
+    """
     catalog = []
+    for skill in load_skills(Path(config_dir) / "skills"):
+        readme = skill.source_path.parent / "README.md"
 
-    if not skills_dir.is_dir():
-        return catalog
-
-    for skill_path in sorted(skills_dir.iterdir()):
-        if not skill_path.is_dir():
-            continue
-
-        skill_md = skill_path / "SKILL.md"
-        readme = skill_path / "README.md"
-
-        if not skill_md.is_file():
-            continue
-
-        fm = _parse_frontmatter(skill_md)
-        metadata = fm.get("metadata", {})
-        name = fm.get("name", skill_path.name)
-
-        # Extract description from README first line after title, or from frontmatter
         description = ""
         if readme.is_file():
             readme_text = readme.read_text(encoding="utf-8")
-            # Find first paragraph after the title
             lines = readme_text.split("\n")
             past_title = False
             for line in lines:
@@ -108,49 +53,29 @@ def _build_catalog(config_dir: str) -> list:
                     break
 
         if not description:
-            description = fm.get("description", "")[:200]
+            description = skill.description[:200]
 
-        # Convert markdown links to HTML (rendered inside innerHTML in cards)
         description = re.sub(
             r'\[([^\]]+)\]\(([^)]+)\)',
             r'<a href="\2" target="_blank" rel="noopener">\1</a>',
-            description
+            description,
         )
-        # Convert markdown bold to HTML
         description = re.sub(
             r'\*\*([^*]+)\*\*',
             r'<strong>\1</strong>',
-            description
+            description,
         )
 
-        # Collect all aws-devops-agent-skills.* dimensions
-        dimensions = {}
-        for key, value in metadata.items():
-            if key.startswith("aws-devops-agent-skills."):
-                dim_name = key.replace("aws-devops-agent-skills.", "")
-                dimensions[dim_name] = [v.strip() for v in value.split(",")]
-
         catalog.append({
-            "id": skill_path.name,
-            "name": _format_name(skill_path.name),
+            "id": skill.id,
+            "name": skill.title,
             "description": description,
-            "dimensions": dimensions,
-            "author": metadata.get("author", ""),
-            "version": metadata.get("version", ""),
+            "dimensions": skill.pages_dimensions(),
+            "author": skill.author,
+            "version": skill.version,
         })
 
     return catalog
-
-
-def _format_name(skill_id: str) -> str:
-    """Convert skill-id to display name: aws-health-events -> AWS Health Events."""
-    words = skill_id.split("-")
-    # Capitalize known acronyms
-    acronyms = {"aws", "eks", "rds", "rca", "mcp", "crm"}
-    return " ".join(
-        w.upper() if w.lower() in acronyms else w.capitalize()
-        for w in words
-    )
 
 
 def on_pre_build(config, **kwargs):
