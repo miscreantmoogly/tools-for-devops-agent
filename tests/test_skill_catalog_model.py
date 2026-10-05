@@ -101,7 +101,7 @@ metadata:
             self.assertEqual("AWS RDS RCA", record.title)
             self.assertEqual(record.description, record.summary)
 
-    def test_discovers_only_skill_files_in_sorted_order(self):
+    def test_discovers_only_real_skill_directories_in_sorted_order(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             second = write_skill(
@@ -118,6 +118,21 @@ metadata:
 
             self.assertEqual((first, second), discover_skill_paths(root / "skills"))
 
+            outside = write_skill(
+                root / "outside",
+                "linked-skill",
+                "name: linked-skill\ndescription: Linked.\nmetadata:\n  author: test\n  version: 1.0.0",
+            ).parent
+            linked_root = root / "skills" / "linked-skill"
+            linked_root.symlink_to(outside)
+            with self.assertRaisesRegex(SkillCatalogError, "must not be a symlink"):
+                discover_skill_paths(root / "skills")
+
+            linked_root.unlink()
+            linked_root.write_text("not a directory\n", encoding="utf-8")
+            with self.assertRaisesRegex(SkillCatalogError, "must be a directory"):
+                discover_skill_paths(root / "skills")
+
     def test_rejects_malformed_and_duplicate_fields(self):
         cases = {
             "malformed": "name: malformed\ndescription without colon\nmetadata:\n  author: test\n  version: 1.0.0",
@@ -128,6 +143,29 @@ metadata:
             with self.subTest(slug=slug), tempfile.TemporaryDirectory() as directory:
                 path = write_skill(Path(directory), slug, frontmatter)
                 with self.assertRaises(SkillCatalogError):
+                    load_skill(path)
+
+    def test_rejects_typed_collections_and_nested_catalog_values(self):
+        cases = {
+            "flow-sequence": "description: [not, a, string]",
+            "flow-mapping": "description: {text: value}",
+            "boolean": "metadata:\n  author: true\n  version: 1.0.0",
+            "numeric": "metadata:\n  author: 123\n  version: 1.0.0",
+            "null": "metadata:\n  author: test\n  version: 1.0.0\n  summary: null",
+            "nested-mapping": "description:\n  nested: value",
+            "nested-sequence": "description:\n  - nested value",
+        }
+        for slug, invalid_field in cases.items():
+            with self.subTest(slug=slug), tempfile.TemporaryDirectory() as directory:
+                if invalid_field.startswith("metadata:"):
+                    frontmatter = f"name: {slug}\ndescription: Test.\n{invalid_field}"
+                elif invalid_field.startswith("description:"):
+                    frontmatter = (
+                        f"name: {slug}\n{invalid_field}\nmetadata:\n"
+                        "  author: test\n  version: 1.0.0"
+                    )
+                path = write_skill(Path(directory), slug, frontmatter)
+                with self.assertRaisesRegex(SkillCatalogError, "must be a string"):
                     load_skill(path)
 
     def test_rejects_name_that_does_not_match_path(self):

@@ -42,7 +42,6 @@ from skill_catalog_model import (  # noqa: E402
 )
 
 
-KNOWN_DIMENSIONS = frozenset({"agent-types", "aws-services", "technical-domains"})
 TEXT_PAYLOAD_EXTENSIONS = frozenset(
     {".csv", ".htm", ".html", ".json", ".md", ".svg", ".tsv", ".txt", ".xml", ".yaml", ".yml"}
 )
@@ -187,7 +186,7 @@ def changed_paths(repo_root: Path, base: str, head_ref: str) -> tuple[DiffChange
 
 def _skill_id_from_path(path: str) -> str | None:
     parts = path.split("/")
-    if len(parts) < 3 or parts[0] != "skills" or not parts[1]:
+    if len(parts) < 2 or parts[0] != "skills" or not parts[1]:
         return None
     return parts[1]
 
@@ -239,9 +238,14 @@ def materialize_skill(repo_root: Path, ref: str, skill_id: str, destination: Pat
         except (ValueError, UnicodeDecodeError) as error:
             raise GitError(f"git ls-tree returned malformed data for {relative_root}") from error
         prefix = relative_root + "/"
-        if not relative_path.startswith(prefix):
+        if relative_path == relative_root:
+            target = destination / "skills" / skill_id
+        elif relative_path.startswith(prefix):
+            target = destination / "skills" / skill_id / Path(
+                relative_path.removeprefix(prefix)
+            )
+        else:
             raise GitError(f"git ls-tree returned an unexpected path: {relative_path}")
-        target = destination / "skills" / skill_id / Path(relative_path.removeprefix(prefix))
         target.parent.mkdir(parents=True, exist_ok=True)
         if object_type != "blob":
             raise GitError(f"unsupported Git object {object_type!r} at {relative_path}")
@@ -344,21 +348,24 @@ def inspect_skill(skill_root: Path, skill_id: str, report: ValidationReport) -> 
         return None
     skill_dir = skill_root / "skills" / skill_id
     skill_path = skill_dir / "SKILL.md"
-    if not skill_dir.is_dir() or not skill_path.is_file():
+    try:
+        root_mode = skill_dir.lstat().st_mode
+    except FileNotFoundError:
+        report.add("blocker", "skill root must be a directory", skill_id, relative_skill)
+        return None
+    if stat.S_ISLNK(root_mode):
+        report.add("blocker", "skill root must not be a symlink", skill_id, relative_skill)
+        return None
+    if not stat.S_ISDIR(root_mode):
+        report.add("blocker", "skill root must be a directory", skill_id, relative_skill)
+        return None
+    if not skill_path.is_file():
         report.add("blocker", "skill directory must contain SKILL.md", skill_id, relative_skill)
         return None
 
     record: SkillRecord | None = None
     try:
         record = load_skill(skill_path)
-        unknown_dimensions = sorted(set(record.dimensions) - KNOWN_DIMENSIONS)
-        if unknown_dimensions:
-            report.add(
-                "blocker",
-                "unknown catalog dimension(s): " + ", ".join(unknown_dimensions),
-                skill_id,
-                relative_skill,
-            )
     except (OSError, SkillCatalogError) as error:
         report.add("blocker", str(error), skill_id, relative_skill)
 
@@ -516,7 +523,7 @@ def _all_skill_ids(repo_root: Path) -> tuple[str, ...]:
         sorted(
             path.name
             for path in skills_dir.iterdir()
-            if path.is_dir() and not path.name.startswith(".")
+            if not path.name.startswith(".") and SKILL_ID_PATTERN.fullmatch(path.name)
         )
     )
 

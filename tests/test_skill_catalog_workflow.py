@@ -30,6 +30,7 @@ class SkillCatalogWorkflowTests(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, self.text)
         self.assertIn("fetch-depth: 0", self.text)
+        self.assertIn("persist-credentials: false", self.text)
 
     def test_uses_only_the_pinned_documentation_dependency(self):
         install_lines = [line.strip() for line in self.text.splitlines() if "pip install" in line]

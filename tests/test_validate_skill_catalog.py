@@ -93,6 +93,23 @@ class SkillCatalogValidatorTests(unittest.TestCase):
         self.assertEqual(set(), report.skill_ids)
         self.assertEqual([], report.findings)
 
+    def test_linked_skill_root_is_changed_and_blocked_in_pull_request_mode(self):
+        base = self.initial_skill()
+        outside = self.repo.root / "outside"
+        outside.mkdir()
+        (outside / "SKILL.md").write_text(
+            "---\nname: linked-skill\ndescription: Linked fixture.\nmetadata:\n"
+            "  author: test\n  version: 1.0.0\n---\n",
+            encoding="utf-8",
+        )
+        (self.repo.root / "skills" / "linked-skill").symlink_to("../outside")
+        head = self.repo.commit("add linked skill root")
+
+        report = validator.validate_pull_request(self.repo.root, base, head)
+
+        self.assertIn("linked-skill", report.skill_ids)
+        self.assertTrue(any("skill root must not be a symlink" in f.message for f in report.blockers))
+
     def test_runtime_change_without_version_increase_warns(self):
         base = self.initial_skill()
         write_skill(self.repo.root, body="# Changed runtime\n")
@@ -213,7 +230,7 @@ class SkillCatalogValidatorTests(unittest.TestCase):
         path = skill_dir / "SKILL.md"
         original = path.read_text(encoding="utf-8")
         path.write_text(
-            original.replace("version: 1.0.0", "version: 1.0"),
+            original.replace("version: 1.0.0", 'version: "1.0"'),
             encoding="utf-8",
         )
         invalid_version = validator.validate_local(self.repo.root, ("example-skill",))

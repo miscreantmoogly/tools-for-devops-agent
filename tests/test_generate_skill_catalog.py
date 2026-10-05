@@ -20,6 +20,7 @@ from generate_skill_catalog import (  # noqa: E402
     OutputDifferences,
     PackageEntry,
     PackageError,
+    SkillCatalogError,
     build_archive,
     build_skill_archive,
     check_managed_output,
@@ -204,6 +205,41 @@ class CatalogGenerationTests(unittest.TestCase):
 
                 with self.assertRaisesRegex(PackageError, message):
                     package_manifest(skill_dir)
+
+    def test_generation_rejects_linked_skill_roots(self):
+        with tempfile.TemporaryDirectory() as source_directory, tempfile.TemporaryDirectory() as outside_directory:
+            repo_root = Path(source_directory)
+            outside_skill = write_fixture_skill(Path(outside_directory), "linked-skill")
+            (repo_root / "skills").mkdir()
+            (repo_root / "skills" / "linked-skill").symlink_to(outside_skill)
+
+            skill_root = repo_root / "skills" / "linked-skill"
+            with self.assertRaisesRegex(SkillCatalogError, "must not be a symlink"):
+                generate_managed_files(repo_root)
+            with self.assertRaisesRegex(PackageError, "skill root must not be a symlink"):
+                package_manifest(skill_root)
+
+            skill_root.unlink()
+            skill_root.write_text("not a directory\n", encoding="utf-8")
+            with self.assertRaisesRegex(SkillCatalogError, "skill root must be a directory"):
+                generate_managed_files(repo_root)
+            with self.assertRaisesRegex(PackageError, "skill root must be a directory"):
+                package_manifest(skill_root)
+
+    def test_generation_rejects_unknown_catalog_dimensions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo_root = Path(directory)
+            skill_path = write_fixture_skill(repo_root) / "SKILL.md"
+            skill_path.write_text(
+                skill_path.read_text(encoding="utf-8").replace(
+                    "aws-devops-agent-skills.technical-domains: Operations",
+                    "aws-devops-agent-skills.unknown: Value",
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(SkillCatalogError, "unknown catalog dimension"):
+                generate_managed_files(repo_root)
 
     def test_rejects_unsafe_archive_paths(self):
         unsafe_names = (

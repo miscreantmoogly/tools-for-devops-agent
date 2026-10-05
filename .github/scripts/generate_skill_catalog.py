@@ -193,7 +193,16 @@ def _walk_package_root(skill_dir: Path, root_name: str) -> list[PackageEntry]:
 
 
 def package_manifest(skill_dir: Path) -> tuple[PackageEntry, ...]:
-    """Return the positive installable manifest for one skill directory."""
+    """Return the positive installable manifest for one real skill directory."""
+    try:
+        root_mode = skill_dir.lstat().st_mode
+    except FileNotFoundError as error:
+        raise PackageError(f"skill root does not exist: {skill_dir}") from error
+    if stat.S_ISLNK(root_mode):
+        raise PackageError(f"skill root must not be a symlink: {skill_dir}")
+    if not stat.S_ISDIR(root_mode):
+        raise PackageError(f"skill root must be a directory: {skill_dir}")
+
     entries = [PackageEntry("SKILL.md", skill_dir / "SKILL.md")]
     for root_name in PACKAGE_ROOTS:
         entries.extend(_walk_package_root(skill_dir, root_name))

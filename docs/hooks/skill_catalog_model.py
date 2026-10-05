@@ -28,6 +28,11 @@ _SEMVER_PATTERN = re.compile(
     r"(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$"
 )
 _DIMENSION_PREFIX = "aws-devops-agent-skills."
+KNOWN_DIMENSIONS = frozenset({"agent-types", "aws-services", "technical-domains"})
+_TYPED_PLAIN_SCALAR_PATTERN = re.compile(
+    r"^(?:true|false|null|~|[-+]?(?:\d+(?:\.\d+)?(?:e[-+]?\d+)?|\.inf|\.nan))$",
+    re.IGNORECASE,
+)
 _ACRONYMS = frozenset({"aws", "eks", "rds", "rca", "mcp", "crm"})
 
 
@@ -139,14 +144,24 @@ def format_display_name(skill_id: str) -> str:
 
 
 def discover_skill_paths(skills_dir: Path) -> tuple[Path, ...]:
-    """Return SKILL.md files in stable path order, ignoring unrelated entries."""
+    """Return SKILL.md files in stable path order, rejecting unsafe skill roots."""
     if not skills_dir.is_dir():
         return ()
-    return tuple(
-        directory / "SKILL.md"
-        for directory in sorted(skills_dir.iterdir(), key=lambda path: path.name)
-        if directory.is_dir() and (directory / "SKILL.md").is_file()
-    )
+
+    skill_paths: list[Path] = []
+    for entry in sorted(skills_dir.iterdir(), key=lambda path: path.name):
+        if entry.name.startswith("."):
+            continue
+        if entry.is_symlink():
+            raise SkillCatalogError(f"{entry}: skill root must not be a symlink")
+        if not entry.is_dir():
+            if _NAME_PATTERN.fullmatch(entry.name):
+                raise SkillCatalogError(f"{entry}: skill root must be a directory")
+            continue
+        skill_path = entry / "SKILL.md"
+        if skill_path.is_file():
+            skill_paths.append(skill_path)
+    return tuple(skill_paths)
 
 
 def parse_frontmatter(path: Path) -> Mapping[str, object]:
@@ -236,8 +251,10 @@ def load_skill(path: Path) -> SkillRecord:
         if not key.startswith(_DIMENSION_PREFIX):
             continue
         dimension_name = key.removeprefix(_DIMENSION_PREFIX)
+        if dimension_name not in KNOWN_DIMENSIONS:
+            raise SkillCatalogError(f"{path}: unknown catalog dimension {dimension_name!r}")
         dimension_value = _optional_string(value, f"metadata.{key}", path)
-        if not dimension_name or not dimension_value:
+        if not dimension_value:
             raise SkillCatalogError(f"{path}: dimension {key!r} must not be empty")
         entries = tuple(part.strip() for part in dimension_value.split(","))
         if any(not entry for entry in entries):
@@ -293,8 +310,14 @@ def _parse_scalar(
     if re.fullmatch(r"[>|][+-]?\d?", marker):
         return _parse_block_scalar(marker[0], continuation, path, key)
 
-    pieces = [raw_value.strip()]
-    pieces.extend(line.strip() for line in continuation if line.strip())
+    pieces = [marker]
+    for line in continuation:
+        value = line.strip()
+        if not value:
+            continue
+        if value.startswith(("- ", "[", "{")) or _KEY_PATTERN.fullmatch(value):
+            raise SkillCatalogError(f"{path}: {key} must be a string, not a nested value")
+        pieces.append(value)
     return _decode_scalar(" ".join(pieces).strip(), path, key)
 
 
@@ -337,6 +360,10 @@ def _decode_scalar(value: str, path: Path, key: str) -> str:
         return value[1:-1].replace("''", "'").strip()
     if value.endswith(('"', "'")):
         raise SkillCatalogError(f"{path}: invalid quoted value for {key}")
+    if value.startswith(("[", "{")) or _TYPED_PLAIN_SCALAR_PATTERN.fullmatch(value):
+        raise SkillCatalogError(f"{path}: {key} must be a string")
+    if _KEY_PATTERN.fullmatch(value):
+        raise SkillCatalogError(f"{path}: {key} must be a string, not a mapping")
     return value.strip()
 
 
