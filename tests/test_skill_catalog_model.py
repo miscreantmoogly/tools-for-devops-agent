@@ -60,7 +60,7 @@ metadata:
   author: "one, two"
   version: "1.2.3"
   summary: 'Short summary'
-  aws-devops-agent-skills.agent-types: "Chat tasks, Incident RCA"
+  aws-devops-agent-skills.agent-types: "Chat tasks, Incident RCA, Chat tasks"
 """,
             )
 

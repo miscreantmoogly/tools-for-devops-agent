@@ -242,7 +242,7 @@ def load_skill(path: Path) -> SkillRecord:
         entries = tuple(part.strip() for part in dimension_value.split(","))
         if any(not entry for entry in entries):
             raise SkillCatalogError(f"{path}: dimension {key!r} contains an empty value")
-        dimensions[dimension_name] = entries
+        dimensions[dimension_name] = tuple(dict.fromkeys(entries))
 
     return SkillRecord(
         id=skill_id,
