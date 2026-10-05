@@ -82,24 +82,52 @@ metadata:
             with self.assertRaises(TypeError):
                 record.dimensions["other"] = ("value",)
 
-    def test_optional_title_and_summary_use_exact_fallbacks(self):
-        with tempfile.TemporaryDirectory() as directory:
-            path = write_skill(
-                Path(directory),
-                "aws-rds-rca",
-                """
-name: aws-rds-rca
-description: A description that is used without invented summary copy.
+    def test_parses_folded_and_literal_metadata_summaries(self):
+        cases = {
+            ">": "First summary line. Second summary line.\nFinal paragraph.",
+            "|": "First summary line.\nSecond summary line.\n\nFinal paragraph.",
+        }
+        for marker, expected in cases.items():
+            with self.subTest(marker=marker), tempfile.TemporaryDirectory() as directory:
+                path = write_skill(
+                    Path(directory),
+                    "summary-skill",
+                    f"""
+name: summary-skill
+description: Model-facing description.
 metadata:
   author: contributor
   version: 1.0.0
+  summary: {marker}
+    First summary line.
+    Second summary line.
+
+    Final paragraph.
+""",
+                )
+
+                self.assertEqual(expected, load_skill(path).summary)
+
+    def test_optional_title_and_summary_use_exact_fallbacks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            description = "A" * 201
+            path = write_skill(
+                Path(directory),
+                "aws-rds-rca",
+                f"""
+name: aws-rds-rca
+description: {description}
+metadata:
+  author: contributor
+  version: 1.0.0
+  summary: ""
 """,
             )
 
             record = load_skill(path)
 
             self.assertEqual("AWS RDS RCA", record.title)
-            self.assertEqual(record.description, record.summary)
+            self.assertEqual(description, record.summary)
 
     def test_discovers_only_real_skill_directories_in_sorted_order(self):
         with tempfile.TemporaryDirectory() as directory:

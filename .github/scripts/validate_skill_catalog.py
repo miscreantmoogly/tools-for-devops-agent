@@ -213,7 +213,13 @@ def _blob(repo_root: Path, object_id: str) -> bytes:
     return _git_checked(repo_root, "cat-file", "blob", object_id, text=False).stdout
 
 
-def materialize_skill(repo_root: Path, ref: str, skill_id: str, destination: Path) -> bool:
+def materialize_skill(
+    repo_root: Path,
+    ref: str,
+    skill_id: str,
+    destination: Path,
+    report: ValidationReport | None = None,
+) -> bool:
     """Materialize one skill from a Git tree without checking out contributor code."""
     relative_root = f"skills/{skill_id}"
     result = _git_checked(
@@ -240,15 +246,26 @@ def materialize_skill(repo_root: Path, ref: str, skill_id: str, destination: Pat
         prefix = relative_root + "/"
         if relative_path == relative_root:
             target = destination / "skills" / skill_id
+            package_path = True
         elif relative_path.startswith(prefix):
-            target = destination / "skills" / skill_id / Path(
-                relative_path.removeprefix(prefix)
+            skill_relative_path = relative_path.removeprefix(prefix)
+            target = destination / "skills" / skill_id / Path(skill_relative_path)
+            package_path = skill_relative_path == "SKILL.md" or skill_relative_path.startswith(
+                ("references/", "assets/")
             )
         else:
             raise GitError(f"git ls-tree returned an unexpected path: {relative_path}")
         target.parent.mkdir(parents=True, exist_ok=True)
         if object_type != "blob":
-            raise GitError(f"unsupported Git object {object_type!r} at {relative_path}")
+            if report is not None and package_path:
+                report.skill_ids.add(skill_id)
+                report.add(
+                    "blocker",
+                    f"package policy: Git object {object_type!r} is not a regular file",
+                    skill_id,
+                    relative_path,
+                )
+            continue
         content = _blob(repo_root, object_id)
         if mode == "120000":
             try:
@@ -259,7 +276,14 @@ def materialize_skill(repo_root: Path, ref: str, skill_id: str, destination: Pat
             target.write_bytes(content)
             target.chmod(0o755 if mode == "100755" else 0o644)
         else:
-            raise GitError(f"unsupported Git mode {mode!r} at {relative_path}")
+            if report is not None and package_path:
+                report.skill_ids.add(skill_id)
+                report.add(
+                    "blocker",
+                    f"package policy: Git mode {mode!r} is not a regular file",
+                    skill_id,
+                    relative_path,
+                )
     return True
 
 
@@ -444,7 +468,13 @@ def validate_pull_request(
         head_has: dict[str, bool] = {}
         for skill_id in identities:
             base_has[skill_id] = materialize_skill(repo_root, base, skill_id, base_root)
-            head_has[skill_id] = materialize_skill(repo_root, head_ref, skill_id, head_root)
+            head_has[skill_id] = materialize_skill(
+                repo_root,
+                head_ref,
+                skill_id,
+                head_root,
+                report,
+            )
 
         shallow = _is_shallow(repo_root)
         for skill_id in identities:
@@ -523,7 +553,12 @@ def _all_skill_ids(repo_root: Path) -> tuple[str, ...]:
         sorted(
             path.name
             for path in skills_dir.iterdir()
-            if not path.name.startswith(".") and SKILL_ID_PATTERN.fullmatch(path.name)
+            if not path.name.startswith(".")
+            and (
+                path.is_symlink()
+                or path.is_dir()
+                or SKILL_ID_PATTERN.fullmatch(path.name)
+            )
         )
     )
 

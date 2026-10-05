@@ -110,6 +110,27 @@ class SkillCatalogValidatorTests(unittest.TestCase):
         self.assertIn("linked-skill", report.skill_ids)
         self.assertTrue(any("skill root must not be a symlink" in f.message for f in report.blockers))
 
+    def test_gitlink_in_installable_root_is_a_policy_blocker(self):
+        base = self.initial_skill()
+        run_git(
+            self.repo.root,
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            f"160000,{base},skills/example-skill/assets/dependency",
+        )
+        run_git(self.repo.root, "commit", "-m", "add installable gitlink")
+        head = run_git(self.repo.root, "rev-parse", "HEAD")
+
+        report = validator.validate_pull_request(self.repo.root, base, head)
+
+        self.assertTrue(any("Git object 'commit'" in f.message for f in report.blockers))
+        with mock.patch.object(validator, "REPO_ROOT", self.repo.root):
+            self.assertEqual(
+                1,
+                validator.main(["--base-ref", base, "--head-ref", head]),
+            )
+
     def test_runtime_change_without_version_increase_warns(self):
         base = self.initial_skill()
         write_skill(self.repo.root, body="# Changed runtime\n")
@@ -298,6 +319,11 @@ class SkillCatalogValidatorTests(unittest.TestCase):
         write_skill(self.repo.root)
         with mock.patch.object(validator, "REPO_ROOT", self.repo.root):
             self.assertEqual(0, validator.main(["--all"]))
+
+            write_skill(self.repo.root, "Bad-Skill")
+            self.assertEqual(1, validator.main(["--all"]))
+            shutil.rmtree(self.repo.root / "skills" / "Bad-Skill")
+
             references = self.repo.root / "skills" / "example-skill" / "references"
             references.mkdir()
             (references / "secret.txt").write_text(

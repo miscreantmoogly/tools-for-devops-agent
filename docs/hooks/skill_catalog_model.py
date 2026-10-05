@@ -242,9 +242,10 @@ def load_skill(path: Path) -> SkillRecord:
     SemVer.parse(version)
 
     summary_value = metadata_value.get("summary")
-    summary = _optional_string(summary_value, "metadata.summary", path) or description
-    if summary_value is not None and len(summary) > 200:
+    explicit_summary = _optional_string(summary_value, "metadata.summary", path)
+    if explicit_summary and len(explicit_summary) > 200:
         raise SkillCatalogError(f"{path}: metadata.summary must be at most 200 characters")
+    summary = explicit_summary or description
 
     dimensions: dict[str, tuple[str, ...]] = {}
     for key, value in metadata_value.items():
@@ -281,22 +282,51 @@ def load_skills(skills_dir: Path) -> tuple[SkillRecord, ...]:
 
 def _parse_metadata(lines: list[str], path: Path) -> Mapping[str, str]:
     metadata: dict[str, str] = {}
-    for line in lines:
+    significant_lines = [
+        line for line in lines if line.strip() and not line.lstrip().startswith("#")
+    ]
+    if not significant_lines:
+        return MappingProxyType(metadata)
+    indentation = min(len(line) - len(line.lstrip()) for line in significant_lines)
+
+    index = 0
+    while index < len(lines):
+        line = lines[index]
         if not line.strip() or line.lstrip().startswith("#"):
+            index += 1
             continue
-        if not line[0].isspace():
+        line_indentation = len(line) - len(line.lstrip())
+        if line_indentation != indentation:
             raise SkillCatalogError(f"{path}: malformed metadata indentation")
-        stripped = line.strip()
-        match = _KEY_PATTERN.fullmatch(stripped)
+        match = _KEY_PATTERN.fullmatch(line[indentation:])
         if not match:
             raise SkillCatalogError(f"{path}: malformed metadata line {line!r}")
         key = match.group(1)
         if key in metadata:
             raise SkillCatalogError(f"{path}: duplicate metadata field {key!r}")
         raw_value = match.group(2) or ""
-        if not raw_value:
+        index += 1
+
+        continuation: list[str] = []
+        while index < len(lines):
+            candidate = lines[index]
+            if candidate.strip() and not candidate.lstrip().startswith("#"):
+                candidate_indentation = len(candidate) - len(candidate.lstrip())
+                if candidate_indentation == indentation:
+                    break
+                if candidate_indentation < indentation:
+                    raise SkillCatalogError(f"{path}: malformed metadata indentation")
+            continuation.append(candidate)
+            index += 1
+
+        if not raw_value and not any(line.strip() for line in continuation):
             raise SkillCatalogError(f"{path}: metadata field {key!r} must be a scalar")
-        metadata[key] = _decode_scalar(raw_value, path, f"metadata.{key}")
+        metadata[key] = _parse_scalar(
+            raw_value,
+            continuation,
+            path,
+            f"metadata.{key}",
+        )
     return MappingProxyType(metadata)
 
 
